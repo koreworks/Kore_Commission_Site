@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>커미션 안내 - 질문</title>
+</head>
+<body>
+  <h1>커미션 안내</h1>
+  <p>질문에 답하면, 조건에 맞는 안내와 실력본으로 안내됩니다.</p>
+
+  <hr />
+
+  <!-- 질문 영역 -->
+  <div id="questionBox"></div>
+
+  <br />
+  <button id="backBtn">← 이전으로</button>
+  <button id="resetBtn">처음부터</button>
+
+  <script>
+    /**
+     * 저장 구조(로컬):
+     * localStorage["Kore_Commission_answers"] = JSON 문자열
+     * {
+     *   pay: "무페이" | "소페이" | "유페이",
+     *   usage: "개인 소장" | "영상 업로드용(비상업)" | "상업용",
+     *   comm: "최소한의 연락" | "중간중간 공유",
+     *   portfolio: "가능" | "불가능(+10%)",
+     *   viewMode: "요약만 보기" | "자세한 안내 + 실력본 보기" | "바로 실력본 보기"
+     * }
+     *
+     * localStorage["Kore_Commission_step"] = 현재 step 인덱스
+     * localStorage["Kore_Commission_history"] = step 이동 기록(뒤로가기용)
+     */
+
+    const LS_ANS = "Kore_Commission_answers";
+    const LS_STEP = "Kore_Commission_step";
+    const LS_HIS = "Kore_Commission_history";
+
+    // 기본값
+    const defaultAnswers = {
+      pay: null,
+      usage: null,
+      comm: null,
+      portfolio: null,
+      viewMode: null
+    };
+
+    function loadAnswers() {
+      const raw = localStorage.getItem(LS_ANS);
+      return raw ? JSON.parse(raw) : { ...defaultAnswers };
+    }
+    function saveAnswers(obj) {
+      localStorage.setItem(LS_ANS, JSON.stringify(obj));
+    }
+
+    function loadStep() {
+      const raw = localStorage.getItem(LS_STEP);
+      return raw ? Number(raw) : 0;
+    }
+    function saveStep(n) {
+      localStorage.setItem(LS_STEP, String(n));
+    }
+
+    function loadHistory() {
+      const raw = localStorage.getItem(LS_HIS);
+      return raw ? JSON.parse(raw) : [];
+    }
+    function saveHistory(arr) {
+      localStorage.setItem(LS_HIS, JSON.stringify(arr));
+    }
+
+    function resetAll() {
+      localStorage.removeItem(LS_ANS);
+      localStorage.removeItem(LS_STEP);
+      localStorage.removeItem(LS_HIS);
+      render();
+    }
+
+    // Step 정의
+    // 0: Q1(페이) -> 1: Q2(용도) -> 2: Q3(소통) -> 3: 포폴 -> 4: Q4(안내 방식) -> result.html 이동
+    function getSteps(answers) {
+      return [
+        {
+          key: "pay",
+          title: "Q1. 원하시는 페이 타입을 선택해주세요",
+          desc: "선택하신 페이 타입에 따라 가능 범위, 일정, 가격, 실력본 퀄리티가 달라집니다.",
+          options: ["무페이", "소페이", "유페이"]
+        },
+        {
+          key: "usage",
+          title: "Q2. 결과물을 어떤 용도로 사용할 예정인가요?",
+          desc:
+            "선택하신 페이 타입에 따라 일부 사용 용도는 선택이 제한될 수 있습니다.\n" +
+            "※ 상업용 기준은 수익 창출 여부입니다. (수익 창출이 없는 커버곡 영상 → 상업용 아님)",
+          options: (() => {
+            // 무페이면 상업용 선택 자체를 못 하게
+            if (answers.pay === "무페이") {
+              return ["개인 소장", "영상 업로드용(비상업)"];
+            }
+            return ["개인 소장", "영상 업로드용(비상업)", "상업용"];
+          })()
+        },
+        {
+          key: "comm",
+          title: "Q3. 커뮤니케이션 방식은 어떤 쪽이 편하신가요?",
+          desc:
+            "- 최소한의 연락: 오마카세 위주, 주관적 피드백 최대 2회, 작업 중간 단계 방향 변경 불가\n" +
+            "- 중간중간 공유: 진행 단계에 맞는 수정 가능, 더 높은 완성도를 원하면 구체적인 피드백이 필요할 수 있음\n\n" +
+            "※ 미세 조정은 언제나 환영하지만, 작업 중간 단계에서 작업 방향 자체를 바꾸는 요청은 페이 타입과 관계없이 허가되지 않습니다.",
+          options: ["최소한의 연락", "중간중간 공유"]
+        },
+        {
+          key: "portfolio",
+          title: "추가 질문. 결과물을 포트폴리오로 사용해도 괜찮을까요?",
+          desc: "불가능을 선택하면 최종 금액의 +10%가 추가됩니다.",
+          options: ["가능", "불가능(+10%)"]
+        },
+        {
+          key: "viewMode",
+          title: "Q4. 안내 방식을 선택해주세요",
+          desc:
+            "- 요약만 보기: 선택 요약 + 실력본 안내(작업 순서) 요약\n" +
+            "- 자세한 안내 + 실력본 보기: 선택 요약 + 실력본 안내 전문 + 실력본\n" +
+            "- 바로 실력본 보기: 선택한 페이 타입 실력본만",
+          options: ["요약만 보기", "자세한 안내 + 실력본 보기", "바로 실력본 보기"]
+        }
+      ];
+    }
+
+    function render() {
+      const answers = loadAnswers();
+      const steps = getSteps(answers);
+      let step = loadStep();
+
+      // step이 범위를 벗어나면 보정
+      if (step < 0) step = 0;
+      if (step >= steps.length) step = steps.length - 1;
+      saveStep(step);
+
+      const q = steps[step];
+      const box = document.getElementById("questionBox");
+      box.innerHTML = "";
+
+      const h2 = document.createElement("h2");
+      h2.textContent = q.title;
+
+      const p = document.createElement("p");
+      p.textContent = q.desc;
+
+      box.appendChild(h2);
+      box.appendChild(p);
+
+      // 버튼들
+      q.options.forEach((opt) => {
+        const btn = document.createElement("button");
+        btn.textContent = opt;
+        btn.style.display = "block";
+        btn.style.margin = "8px 0";
+        btn.onclick = () => {
+          // 답 저장
+          const nextAnswers = loadAnswers();
+          nextAnswers[q.key] = opt;
+          saveAnswers(nextAnswers);
+
+          // 히스토리 저장(뒤로가기용)
+          const history = loadHistory();
+          history.push(step);
+          saveHistory(history);
+
+          // 다음 step으로
+          const nextStep = step + 1;
+          if (nextStep >= steps.length) {
+            // 결과 페이지로 이동
+            location.href = "result.html";
+          } else {
+            saveStep(nextStep);
+            render();
+          }
+        };
+        box.appendChild(btn);
+      });
+
+      // 뒤로가기 버튼 상태
+      const backBtn = document.getElementById("backBtn");
+      const history = loadHistory();
+      backBtn.disabled = history.length === 0;
+
+      backBtn.onclick = () => {
+        const h = loadHistory();
+        if (h.length === 0) return;
+        const prev = h.pop();
+        saveHistory(h);
+        saveStep(prev);
+        render();
+      };
+
+      // 처음부터 버튼
+      document.getElementById("resetBtn").onclick = resetAll;
+    }
+
+    render();
+  </script>
+</body>
+</html>
